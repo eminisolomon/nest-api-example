@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches:
+      - master
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Run the unit tests 🧪
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, 'skip-ci')"
+    steps:
+      - name: Checkout 🛎
+        uses: actions/checkout@v4
+      - name: Install PNPM 🧰
+        uses: pnpm/action-setup@v2
+        with:
+          version: latest
+      - name: Install Node.js LTS 📜
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: pnpm
+      - name: Install dependencies 📦
+        run: pnpm install --frozen-lockfile --strict-peer-dependencies
+      - name: Run tests 🧪
+        run: pnpm test:cov --ci --json --testLocationInResults --outputFile=result.json
+        env:
+          SECRET: qui-eu-ad-excepteur-occaecat-id-ipsum-ex-minim
+      - name: Report test results 📝
+        uses: tanmen/jest-reporter@v1
+        if: always()
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Monitor coverage 📫
+        uses: slavcodev/coverage-monitor-action@1.8.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          coverage_format: clover
+          coverage_path: coverage/clover.xml
+          check: github.event_name == 'pull_request'
+          threshold_alert: 50
+          threshold_warning: 80
+      - name: Upload code coverage ⬆️
+        uses: actions/upload-artifact@v3
+        with:
+          name: unit-coverage
+          path: coverage
+
+  e2e:
+    name: Run the end to end tests 🚔
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, 'skip-ci')"
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: armband
+          POSTGRES_PASSWORD: 9HNtQV78T4MmBibJ
+          POSTGRES_DB: sharper
+        ports:
+          - 5432:5432
+        # needed because the postgres container does not provide a healthcheck
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - name: Checkout 🛎
+        uses: actions/checkout@v4
+      - name: Install PNPM 🧰
+        uses: pnpm/action-setup@v2
+        with:
+          version: latest
+      - name: Install Node.js LTS 📜
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: pnpm
+      - name: Install dependencies 📦
+        run: pnpm install --frozen-lockfile --strict-peer-dependencies
+      - name: Build 🛠️
+        run: pnpm build
+      - name: Prepare the DB 🐘
+        run: |
+          pnpm db:create
+          pnpm typeorm migration:run
+          pnpm db:seed
+        env:
+          DATABASE_URL: postgres://armband:9HNtQV78T4MmBibJ@localhost:${{ job.services.postgres.ports['5432'] }}/sharper
+      - name: Run the server 🚀
+        run: pnpm start:prod &
+        env:
+          PORT: 3000
+          SECRET: quis-voluptate-quis-sit-incididunt-ullamco-reprehenderit-ut-magna-laborum-irure-eu-adipisicing
+          DATABASE_URL: postgres://armband:9HNtQV78T4MmBibJ@localhost:${{ job.services.postgres.ports['5432'] }}/sharper
+          NODE_ENV: production
+      - name: Run tests 🧪
+        run: pnpm test:e2e --ci --json --testLocationInResults --outputFile=result.json
+        env:
+          PACTUM_REQUEST_BASE_URL: 'http://localhost:3000'
+      - name: Report test results 📝
+        uses: tanmen/jest-reporter@v1
+        if: always()
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          action-name: e2e report
